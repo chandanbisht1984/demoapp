@@ -52,5 +52,5 @@ jobs:
         with:
           app-name: 'Adportl'
           slot-name: 'Production'
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_FADD92A1BBA84DA88FF65DB99486AF3F }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_1E5BC0FECC664963B620CC7C6F810FBC }}
           package: .
