@@ -1,10 +1,362 @@
-<!DOCTYPE html>
-<html>
-<body>
+import { Stack, App, StackProps, Fn, CfnOutput , RemovalPolicy} from 'aws-cdk-lib';
+import { Construct } from 'constructs';
+import { CfnParametersCode, Code, Runtime, Function as LambdaFunction, Tracing  } from 'aws-cdk-lib/aws-lambda';
+import { CfnParameter, Duration} from 'aws-cdk-lib';
+import { RestApi,IRestApi, LambdaIntegration, MethodLoggingLevel, Cors } from 'aws-cdk-lib/aws-apigateway';
+import { Bucket, IBucket, BucketAccessControl } from 'aws-cdk-lib/aws-s3'
+import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
+import { StringParameter } from 'aws-cdk-lib/aws-ssm';
+import { SingleTableDesignConstruct } from "./single-table-design-construct";
 
-<h1>My First Heading</h1>
 
-<p>My first paragraph.</p>
+import {CfnWebACL, CfnWebACLProps, CfnWebACLAssociation, CfnRuleGroup, CfnLoggingConfiguration} from "aws-cdk-lib/aws-wafv2";
+import {Role, IRole, ServicePrincipal, PolicyStatement, Effect } from 'aws-cdk-lib/aws-iam';
+import {
+  CloudFrontWebDistribution,
+  CloudFrontWebDistributionProps,
+  HttpVersion,
+  PriceClass,
+  ViewerProtocolPolicy,
+  CloudFrontAllowedMethods,
+  OriginProtocolPolicy,
+  OriginAccessIdentity,
+  SSLMethod ,
+  SecurityPolicyProtocol,
+  IDistribution,
+  SourceConfiguration,
+  ViewerCertificate,
+  CloudFrontAllowedCachedMethods,
+  Distribution,
+  experimental,
+  DistributionProps,
+  LambdaEdgeEventType,
+  BehaviorOptions,
+  IOrigin,
+  AllowedMethods,
+  CachePolicy,
+  CachedMethods
+} from 'aws-cdk-lib/aws-cloudfront';
 
-</body>
-</html>
+
+import { HostedZone, ARecord, RecordTarget, HostedZoneAttributes, IHostedZone } from 'aws-cdk-lib/aws-route53';
+import { CloudFrontTarget } from 'aws-cdk-lib/aws-route53-targets';
+
+import { ICertificate,Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+
+import { S3Origin, S3OriginProps ,RestApiOrigin, RestApiOriginProps, HttpOrigin, HttpOriginProps} from 'aws-cdk-lib/aws-cloudfront-origins';
+
+
+
+
+
+import { readFileSync } from "fs";
+import * as path from "path";
+
+const addEdgeLambdaToRoleTrustStatement = (role: IRole) => {
+  if (role instanceof Role && role.assumeRolePolicy) {
+    const statement = new PolicyStatement();
+    const edgeLambdaServicePrincipal = new ServicePrincipal('edgelambda.amazonaws.com');
+    const s3ServicePrincipal = new ServicePrincipal('s3.amazonaws.com');
+    const eventsServicePrincipal = new ServicePrincipal('events.amazonaws.com');
+    statement.addPrincipals(edgeLambdaServicePrincipal);
+    statement.addPrincipals(s3ServicePrincipal);
+    statement.addPrincipals(eventsServicePrincipal);
+    statement.addActions(edgeLambdaServicePrincipal.assumeRoleAction);
+    role.assumeRolePolicy.addStatements(statement);
+  }
+}
+
+
+export interface WispPortalServerlessStackProps extends StackProps {
+  name: string
+  title: string
+  codecommit: {
+    pipelineName: string
+    repositoryName: string
+  }
+  env: { 
+    region: string
+    account: string
+  }
+  waf:{
+    cloudfrontallowacl:string
+  },
+  domainConfig: {
+    domainName: string
+    siteSubDomain:string
+    adminSubDomain: string
+    storybookSubDomain: string
+    certRegion:string
+    tag: {
+      k:string
+      v:string
+    },
+    certArn:string
+  zone:{
+    hostedZoneId:string
+    zoneName:string
+  }},
+  originAccessIdentity: OriginAccessIdentity;
+  core: {
+    apiId: string;
+    domain: string;
+    originPath: string;
+  }
+
+}
+
+export class WispPortalServerlessStack extends Stack {
+  public readonly cloudFrontPortalOAI: OriginAccessIdentity;
+  public readonly code: CfnParametersCode;
+
+  constructor(scope: Construct, id: string, props: WispPortalServerlessStackProps) {
+    super(scope, id, props);
+
+    this.code = Code.fromCfnParameters({
+      bucketNameParam: new CfnParameter(this, 'CodeBucketName'),
+      objectKeyParam: new CfnParameter(this, 'CodeBucketObjectKey')
+    })
+
+  //  const singleTableDesignDB =  new SingleTableDesignConstruct(this, "SingleTableDesignDB", {
+  //     tableProps: {
+  //       tableName: "single-table-design-db",
+  //     },
+  //   });
+
+
+
+
+    /**
+     * Multi-tenant S3 bucket to store portal UI assets
+     * https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html
+     */
+    const bucketAssets:IBucket = new Bucket(this, `${props.name}-static-assets`, {})
+
+    new CfnOutput(this, 
+      `${props.name}-static-assets-bucketArn`, 
+    {
+      value: bucketAssets.bucketArn,
+      exportName: `${props.name}-static-assets-bucketArn`
+    });
+
+    new CfnOutput(this, 
+      `${props.name}-static-assets-bucketName`, 
+    {
+      value: bucketAssets.bucketName,
+      exportName: `${props.name}-static-assets-bucketName`
+    });
+
+
+
+
+/**
+ * Lambda Edge
+ */
+const handler = readFileSync(
+  `./aws/lib/lambdaedge/originRequestRouter.js`,
+  'utf-8'
+);
+
+console.log('bucketAssets.bucketName::', bucketAssets.bucketName)
+
+const originRequestRouterHandler = handler
+.replace("{S3_BUCKET_NAME}", bucketAssets.bucketName)
+
+// .replace("{DB_TABLE_NAME}", dynamoDbTable)
+// .replace("{DB_TABLE_REGION}", region);
+
+const PortalSSRLambda:LambdaFunction = new LambdaFunction(this, `${props.name}-originRequestRouterPortalSSRLambda`, {
+  code: Code.fromInline(`${originRequestRouterHandler}`),
+  handler: 'index.main',
+  runtime: Runtime.NODEJS_18_X,
+  memorySize: 128,
+  functionName: `${props.name}-originRequestRouterPortalSSRLambda`,
+  currentVersionOptions:{
+    removalPolicy: RemovalPolicy.DESTROY
+  }
+})
+
+PortalSSRLambda.addToRolePolicy(
+  new PolicyStatement({
+    resources: ['*'],
+    actions: ['*']
+  })
+);
+
+/**
+ * Add to Lambda execution role permissions to call 
+ */
+
+addEdgeLambdaToRoleTrustStatement(PortalSSRLambda.role!);
+
+
+  /**
+   * Cloudfront
+   */
+
+  this.cloudFrontPortalOAI = new OriginAccessIdentity(this, 'OAI', {
+    comment: `OAI for ${props.name} Portal UI website.`,
+  });
+
+  bucketAssets.addToResourcePolicy(
+    new PolicyStatement({
+      effect: Effect.ALLOW,
+      principals: [this.cloudFrontPortalOAI.grantPrincipal],
+      actions: [
+      's3:PutObject',
+      's3:GetObject',
+      's3:AbortMultipartUpload',
+      's3:ListBucket',
+      's3:DeleteObject',
+      's3:GetObjectVersion',
+      's3:ListMultipartUploadParts'
+    ],
+      resources: [bucketAssets.bucketArn, `${bucketAssets.bucketArn}/*`],
+    }),
+  );
+
+  //,`${PortalSSRLambda.functionArn}
+
+
+  const viewerCertificateOp:ICertificate =Certificate.fromCertificateArn(this,'d-wisp.nextcloud-cert',props.domainConfig.certArn);
+
+      /**
+     * Create Admin Cloudfront WAF
+     */
+      const  webaclProps: CfnWebACLProps = {
+        defaultAction: {
+          allow: {}
+        },
+        scope: "CLOUDFRONT",
+        visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: `waf-cloudfront-allow-acl-admin-${props.name}`,
+            sampledRequestsEnabled: false,
+        }
+    }
+
+    const webaclAdminCFD = new CfnWebACL(this, `waf-cloudfront-allow-acl-portal-${props.name}`, webaclProps);
+
+
+    const bucketProps:S3OriginProps ={
+      originAccessIdentity: this.cloudFrontPortalOAI
+    }
+
+    /**
+     * wisp core backend intergation
+     */
+
+  //   const apiOriginBackend:IRestApi = RestApi.fromRestApiId(this,`${props.name}-wisp-core`,`${props.core.apiId}`)
+
+
+  //  const apiOriginProps:RestApiOriginProps = {
+  //   originPath: '/prod'
+  //  }
+
+
+
+  //    const apiOrigin:BehaviorOptions =  {
+  //     origin: new RestApiOrigin(apiOriginBackend, apiOriginProps),
+  //     allowedMethods:AllowedMethods.ALLOW_ALL
+  //   }
+
+  const apiOriginProps:HttpOriginProps ={
+    originPath:props.core.originPath
+  }
+
+    const apiOrigin:BehaviorOptions =  {
+      origin: new HttpOrigin(props.core.domain, apiOriginProps),
+      allowedMethods:AllowedMethods.ALLOW_ALL,
+      cachePolicy: CachePolicy.CACHING_DISABLED
+    }
+
+
+  const defaultBehavior:BehaviorOptions =  {
+    origin: new S3Origin(bucketAssets,bucketProps),
+    viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+
+    edgeLambdas: [
+      {
+        functionVersion: PortalSSRLambda.currentVersion,
+        eventType: LambdaEdgeEventType.VIEWER_REQUEST,
+        includeBody: true
+      },
+    ],
+    allowedMethods: AllowedMethods.ALLOW_ALL,
+    //cachePolicy: CachePolicy.CACHING_DISABLED,
+    cachedMethods: CachedMethods.CACHE_GET_HEAD_OPTIONS
+
+  }
+
+const siteDomain = props.domainConfig.siteSubDomain + '.' + props.domainConfig.domainName;
+
+
+
+
+
+   const distributionProps:DistributionProps = {
+    httpVersion: HttpVersion.HTTP2,
+    priceClass: PriceClass.PRICE_CLASS_100,
+    defaultRootObject: '/',
+    defaultBehavior: defaultBehavior,
+    certificate: viewerCertificateOp,
+    domainNames:[siteDomain],
+    comment: `${props.name}-WISP-Portal-UI`,
+    additionalBehaviors:{'*/backend/*':apiOrigin},
+    webAclId: webaclAdminCFD.attrArn
+  }
+
+  const distribution:IDistribution = new Distribution(this, 'WISP-Portal-UI-CDN', distributionProps);
+
+
+   /**
+     * Setup Route53 subdomain Alias pointing to cloudfront distibution
+     */
+
+   const HostedZoneAtt:HostedZoneAttributes = { ...props.domainConfig.zone };
+
+   const zone:IHostedZone = HostedZone.fromHostedZoneAttributes(this, 'Zone', HostedZoneAtt );
+
+   new ARecord(this, `${props.name}-wispPortalUIAliasRecord`, {
+     recordName: siteDomain,
+     target: RecordTarget.fromAlias(new CloudFrontTarget(distribution)),
+     zone,
+   });
+
+   new CfnOutput(this, 'wispPortalUI', { value: 'https://' + siteDomain });
+
+
+  new StringParameter(this, 'SSMCloudFrontDistributionID', {
+    description: 'CloudFront DistributionID',
+    parameterName: `/${props.name}/CloudFront/DistributionID`,
+    stringValue: distribution.distributionId,
+  })
+
+  // new StringParameter(this, 'SSMAPIGatewayRestIs', {
+  //   description: 'API Gateway ID',
+  //   parameterName: `/${props.name}/APIGateway/ApiId`,
+  //   stringValue: this.api.restApiId,
+  // })
+
+  new CfnOutput(this, 
+    'lambdaPortalLambdaFunctionName', 
+  {
+    value: PortalSSRLambda.functionName,
+    exportName: `${this.stackName}-lambdaPortalLambdaFunctionName`
+  });
+
+  // new CfnOutput(this, 
+  //   'lambdaPortalLambdaFunctionArn', 
+  // {
+  //   value: PortalLambda.functionArn,
+  //   exportName: `${this.stackName}-lambdaPortalLambdaFunctionArn`
+  // });
+
+
+
+
+
+
+
+  }
+}
