@@ -1,13 +1,173 @@
-import { StringParameter } from 'aws-cdk-lib/aws-ssm';
-import { Tags} from 'aws-cdk-lib'
-import { Construct } from 'constructs';
+const { GetObjectCommand, S3Client } = require("@aws-sdk/client-s3");
 
-export const getParam = (scope: Construct, name: string) => {
-  return StringParameter.valueForStringParameter(scope, name)
+const client = new S3Client({});
+
+
+let content = "<\!DOCTYPE html><html ><head><meta ><title>Simple Lambda@Edge Static Content Response</title></head><body><p>Hello from Lambda@Edge!</p></body></html>";
+
+const DB_TABLE_NAME = "{DB_TABLE_NAME}";
+const DB_TABLE_REGION = "{DB_TABLE_REGION}";
+const S3_BUCKET_NAME = "{S3_BUCKET_NAME}"
+async function main(event){
+
+
+
+  const request = event.Records[0].cf.request;
+  console.log('event.Records[0]::',event.Records[0]);
+  const authHeader = request.headers;
+
+  console.log("Admin Post event 2:", event);
+/**
+ * Admin Post request: {
+  body: {
+    action: 'read-only',
+    data: 'LS0tLS0tV2ViS2l0Rm9ybUJvdW5kYXJ5UGJ2Y1hjTk1hZ1YxS2NGVS0tDQo=',
+    encoding: 'base64',
+    inputTruncated: false
+  },
+  clientIp: '199.21.163.12',
+  headers: {
+    host: [ [Object] ],
+    'user-agent': [ [Object] ],
+    'content-length': [ [Object] ],
+    'content-type': [ [Object] ],
+    accept: [ [Object] ],
+    origin: [ [Object] ],
+    'accept-encoding': [ [Object] ],
+    'accept-language': [ [Object] ]
+  },
+  method: 'POST',
+  querystring: '',
+  uri: '/panasky/index.html'
 }
 
-export const tagConstruct = (node: Construct, tags: Object)=>{
-  Object.entries(tags).forEach( ([key, value]) => {
-    Tags.of(node).add(key,value); 
-  });
+ */
+  console.log("Admin Post request:", request);
+/**
+ * 2023-10-26T22:51:48.554Z	ae4053a2-6179-4d94-970d-ff991228ac7d	INFO	Admin Post authHeader: {
+  host: [ { key: 'Host', value: 'portal.d-wisp.nextcloud.aero' } ],
+  'user-agent': [
+    {
+      key: 'User-Agent',
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'
+    }
+  ],
+  'content-length': [ { key: 'content-length', value: '44' } ],
+  'content-type': [
+    {
+      key: 'content-type',
+      value: 'multipart/form-data; boundary=----WebKitFormBoundaryPbvcXcNMagV1KcFU'
+    }
+  ],
+  accept: [ { key: 'accept', value: ' } ],
+  origin: [
+    {
+      key: 'origin',
+      value: 'chrome-extension://ihgpcfpkpmdcghlnaofdmjkoemnlijdi'
+    }
+  ],
+  'accept-encoding': [ { key: 'accept-encoding', value: 'gzip, deflate, br' } ],
+  'accept-language': [
+    {
+      key: 'accept-language',
+      value: 'en-US,en;q=0.9,de;q=0.8,fr-FR;q=0.7,fr;q=0.6,es;q=0.5'
+    }
+  ]
 }
+
+ */
+  console.log("Admin Post authHeader:", authHeader);
+
+  const response = {
+    status: '200',
+    statusDescription: 'OK',
+    headers: {
+        'cache-control': [{
+            key: 'Cache-Control',
+            value: 'max-age=100'
+        }],
+        'content-type': [{
+            key: 'Content-Type',
+            value: 'text/html'
+        }]
+    },
+    body: content
+};
+
+if (request.method === 'POST') {
+  const requestBody = Buffer.from(request.body.data, 'base64').toString();
+
+  console.log('requestBody:',requestBody)
+
+  const {clientIp='', uri='/'} = request;
+
+
+
+  const command = new GetObjectCommand({
+      Bucket: S3_BUCKET_NAME,
+      Key: uri.substring(1)
+    });
+
+    console.log('key parts: ', S3_BUCKET_NAME, 'key', uri.substring(1), 'clientIp:',clientIp);
+  
+    try {
+      const response = await client.send(command);
+
+      console.log('POST response: ', response)
+      // The Body object also has 'transformToByteArray' and 'transformToWebStream' methods.
+      const html = await response.Body.transformToString();
+
+
+      // content =  html
+      // .replace('</head>', `<script>window.postData = ${serialize(params)};</script> </head>`)
+
+
+      content =  html
+
+    
+    } catch (err) {
+      console.error('html error',err);
+    }
+
+
+
+
+
+       const responsePost = {
+      status: '200',
+      statusDescription: 'OK',
+      headers: {
+          'cache-control': [{
+              key: 'Cache-Control',
+              value: 'max-age=100'
+          }],
+          'content-type': [{
+              key: 'Content-Type',
+              value: 'text/html'
+          }]
+      },
+      body: content,
+  };
+  console.log('returnEvent:', responsePost)
+  return responsePost;
+
+
+
+} else {
+
+  const responseHtml = {
+    status: '200',
+    statusDescription: 'OK',        
+    body: content,
+ };
+
+
+  return request;
+}
+
+
+return request;
+
+};
+
+module.exports = {main:main};
