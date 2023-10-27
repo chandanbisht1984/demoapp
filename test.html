@@ -1,63 +1,13 @@
-import {StackProps, App, Stack, CfnOutput} from 'aws-cdk-lib';
-import {CfnWebACL, CfnWebACLProps, CfnWebACLAssociation, CfnRuleGroup, CfnLoggingConfiguration} from "aws-cdk-lib/aws-wafv2";
-import { Fn, RemovalPolicy } from 'aws-cdk-lib';
-import { getParam } from '../helpers/helpers';
-import {LogGroup, ILogGroup, MetricFilter, FilterPattern, RetentionDays} from 'aws-cdk-lib/aws-logs';
-import { prependOnceListener } from 'process';
-import {StringParameter} from 'aws-cdk-lib/aws-ssm';
+import { StringParameter } from 'aws-cdk-lib/aws-ssm';
+import { Tags} from 'aws-cdk-lib'
+import { Construct } from 'constructs';
 
-/**
- * ApiCloudfrontWAF
- * Creates a WAF ACL and associates it with an API gateway endpoint.
- */
- export interface CloudfrontWAFProps extends StackProps {
-    name: string
-    env: {region:string, account:string}
-  }
-  
-export class CloudfrontWAFStack extends Stack{
+export const getParam = (scope: Construct, name: string) => {
+  return StringParameter.valueForStringParameter(scope, name)
+}
 
-    constructor( app: App, id: string, props: CloudfrontWAFProps) {
-        super(app, id, props)
-
-        const  webaclProps: CfnWebACLProps = {
-            defaultAction: {
-              allow: {}
-            },
-            scope: "CLOUDFRONT",
-            visibilityConfig: {
-                cloudWatchMetricsEnabled: true,
-                metricName: `waf-cloudfront-allow-acl-${props.name}`,
-                sampledRequestsEnabled: false,
-            }
-        }
-
-        const webacl = new CfnWebACL(this, `waf-cloudfront-allow-acl-${props.name}`, webaclProps);
-
-        new StringParameter(this, 'SSMWEBACLAttrArn', {
-          description: 'WEBACL attrArn',
-          parameterName: `/${props.name}/WEBACL/attrArn`,
-          stringValue: webacl.attrArn,
-        })
-        
-
-
-
-
-        const aclLogGroup:ILogGroup = new LogGroup(this, "ACLLogs", {
-          // WAFv2 Log Groups must begin with `aws-waf-logs`. Including the ACL's
-          logGroupName: `aws-waf-logs-${props.name}`,
-          retention: RetentionDays.ONE_DAY,
-          removalPolicy: RemovalPolicy.DESTROY
-        });
-
-
-        const cfnLoggingConfiguration = new CfnLoggingConfiguration(this, 'CfnLoggingConfiguration', {
-          logDestinationConfigs: [`arn:aws:logs:${props.env.region}:${props.env.account}:log-group:aws-waf-logs-${props.name}`],
-          resourceArn: webacl.attrArn
-        })
-
-    }
-
-
+export const tagConstruct = (node: Construct, tags: Object)=>{
+  Object.entries(tags).forEach( ([key, value]) => {
+    Tags.of(node).add(key,value); 
+  });
 }
