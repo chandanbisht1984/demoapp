@@ -1,139 +1,257 @@
-const { GetObjectCommand, S3Client } = require("@aws-sdk/client-s3");
-
-const client = new S3Client({});
-
-
-let content = "<\!DOCTYPE html><html ><head><meta ><title>Simple Lambda@Edge Static Content Response</title></head><body><p>Hello from Lambda@Edge!</p></body></html>";
-
-const DB_TABLE_NAME = "{DB_TABLE_NAME}";
-const DB_TABLE_REGION = "{DB_TABLE_REGION}";
-const S3_BUCKET_NAME = "{S3_BUCKET_NAME}"
-async function main(event){
+import { Stack, App, StackProps, Fn, CfnOutput, RemovalPolicy,ResourceEnvironment , CfnDynamicReference, CfnDynamicReferenceService, SecretValue} from 'aws-cdk-lib';
+import { Construct } from 'constructs';
+import { CfnParametersCode, Code, Runtime, Function as LambdaFunction, Tracing , IFunction , Version, IVersion} from 'aws-cdk-lib/aws-lambda'
+import {CfnParameter, Duration} from 'aws-cdk-lib'
+import {CfnWebACL, CfnWebACLProps, CfnWebACLAssociation, CfnRuleGroup, CfnLoggingConfiguration} from "aws-cdk-lib/aws-wafv2";
+import { Bucket, IBucket, BucketAccessControl } from 'aws-cdk-lib/aws-s3';
+import {Role, IRole, ServicePrincipal, PolicyStatement, Effect } from 'aws-cdk-lib/aws-iam';
 
 
 
-  const request = event.Records[0].cf.request;
-  console.log('event.Records[0]::',event.Records[0]);
-  const authHeader = request.headers;
+import { getParam } from '../helpers/helpers';
 
-  console.log("Admin Post event 2:", event);
+import {RestApi, LambdaIntegration, MethodLoggingLevel, Cors} from 'aws-cdk-lib/aws-apigateway';
+
+import {StringParameter} from 'aws-cdk-lib/aws-ssm';
+import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
+
+
+
+
+
+// import main from '../../../apps/handler/adminAuthorizer'
+
+
+
+import {
+  AwsCustomResource,
+  AwsCustomResourcePolicy,
+  PhysicalResourceId,
+  AwsSdkCall
+} from 'aws-cdk-lib/custom-resources';
+
+
+import {
+  CloudFrontWebDistribution,
+  CloudFrontWebDistributionProps,
+  HttpVersion,
+  PriceClass,
+  ViewerProtocolPolicy,
+  CloudFrontAllowedMethods,
+  OriginProtocolPolicy,
+  OriginAccessIdentity,
+  SSLMethod ,
+  SecurityPolicyProtocol,
+  IDistribution,
+  SourceConfiguration,
+  ViewerCertificate,
+  CloudFrontAllowedCachedMethods,
+  Distribution,
+  experimental,
+  DistributionProps,
+  LambdaEdgeEventType,
+  BehaviorOptions,
+  IOrigin,
+  AllowedMethods,
+  CachePolicy
+}from 'aws-cdk-lib/aws-cloudfront'
+
+import { HostedZone, ARecord, RecordTarget, HostedZoneAttributes, IHostedZone } from 'aws-cdk-lib/aws-route53';
+import { CloudFrontTarget } from 'aws-cdk-lib/aws-route53-targets';
+
+import { ICertificate,Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+
+import { S3Origin, S3OriginProps ,RestApiOrigin, RestApiOriginProps} from 'aws-cdk-lib/aws-cloudfront-origins';
+
+
 /**
- * Admin Post request: {
-  body: {
-    action: 'read-only',
-    data: 'LS0tLS0tV2ViS2l0Rm9ybUJvdW5kYXJ5UGJ2Y1hjTk1hZ1YxS2NGVS0tDQo=',
-    encoding: 'base64',
-    inputTruncated: false
-  },
-  clientIp: '199.21.163.12',
-  headers: {
-    host: [ [Object] ],
-    'user-agent': [ [Object] ],
-    'content-length': [ [Object] ],
-    'content-type': [ [Object] ],
-    accept: [ [Object] ],
-    origin: [ [Object] ],
-    'accept-encoding': [ [Object] ],
-    'accept-language': [ [Object] ]
-  },
-  method: 'POST',
-  querystring: '',
-  uri: '/panasky/index.html'
+ * 
+ * @param role - Lambda@Edge Role
+ * https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-edge-permissions.html
+ * 
+ * {
+   "Version": "2012-10-17",
+   "Statement": [
+      {
+         "Effect": "Allow",
+         "Principal": {
+            "Service": [
+               "lambda.amazonaws.com",
+               "edgelambda.amazonaws.com"
+            ]
+         },
+         "Action": "sts:AssumeRole"
+      }
+   ]
+}
+ */
+const addEdgeLambdaToRoleTrustStatement = (role: IRole) => {
+  if (role instanceof Role && role.assumeRolePolicy) {
+    const statement = new PolicyStatement();
+    const edgeLambdaServicePrincipal = new ServicePrincipal('edgelambda.amazonaws.com');
+    statement.addPrincipals(edgeLambdaServicePrincipal);
+    statement.addActions(edgeLambdaServicePrincipal.assumeRoleAction);
+    role.assumeRolePolicy.addStatements(statement);
+  }
 }
 
- */
-  console.log("Admin Post request:", request);
-/**
- * 2023-10-26T22:51:48.554Z	ae4053a2-6179-4d94-970d-ff991228ac7d	INFO	Admin Post authHeader: {
-  host: [ { key: 'Host', value: 'portal.d-wisp.nextcloud.aero' } ],
-  'user-agent': [
-    {
-      key: 'User-Agent',
-      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'
+export interface  AdminAPIProps extends StackProps {
+    name: string
+    title: string
+    codecommit: {
+      pipelineName: string
+      repositoryName: string
     }
-  ],
-  'content-length': [ { key: 'content-length', value: '44' } ],
-  'content-type': [
-    {
-      key: 'content-type',
-      value: 'multipart/form-data; boundary=----WebKitFormBoundaryPbvcXcNMagV1KcFU'
+    env: {
+      region: string
+      account: string
     }
-  ],
-  accept: [ { key: 'accept', value: ' } ],
-  origin: [
-    {
-      key: 'origin',
-      value: 'chrome-extension://ihgpcfpkpmdcghlnaofdmjkoemnlijdi'
+    waf:{
+      cloudfrontallowacl:string
     }
-  ],
-  'accept-encoding': [ { key: 'accept-encoding', value: 'gzip, deflate, br' } ],
-  'accept-language': [
-    {
-      key: 'accept-language',
-      value: 'en-US,en;q=0.9,de;q=0.8,fr-FR;q=0.7,fr;q=0.6,es;q=0.5'
+    domainConfig: {
+      domainName: string
+      siteSubDomain:string
+      adminSubDomain: string
+      storybookSubDomain: string
+      certRegion:string
+      tag: {
+        k:string
+        v:string
+      },
+      certArn:string
+    zone:{
+      hostedZoneId:string
+      zoneName:string
+    }}
+    originAccessIdentity: OriginAccessIdentity;
+    lambdaFunctionArnParameterName: string;
+    lambdaEdge:{
+      adminAuthorizerLambdaArn:string
     }
-  ]
-}
 
- */
-  console.log("Admin Post authHeader:", authHeader);
 
-  const response = {
-    status: '200',
-    statusDescription: 'OK',
-    headers: {
-        'cache-control': [{
-            key: 'Cache-Control',
-            value: 'max-age=100'
-        }],
-        'content-type': [{
-            key: 'Content-Type',
-            value: 'text/html'
-        }]
-    },
-    body: content
-};
+  }
 
-if (request.method === 'POST') {
-  const requestBody = Buffer.from(request.body.data, 'base64').toString();
+  export class AdminAPIStack extends Stack {
+    public readonly code: CfnParametersCode;
+    public readonly api: RestApi;
+    public readonly distributionAdmin:IDistribution
 
-  console.log('requestBody:',requestBody)
+    constructor(scope: Construct, id: string, props: AdminAPIProps) {
+      super(scope, id, props)
 
-  const {clientIp='', uri='/'} = request;
+      this.code = Code.fromCfnParameters({
+        bucketNameParam: new CfnParameter(this, 'CodeBucketName'),
+        objectKeyParam: new CfnParameter(this, 'CodeBucketObjectKey')
+      })
+
+      /**
+       * 
+       * https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/dynamic-references.html
+       * {{resolve:secretsmanager:wisp-portal-serverless-lambdEdgeArn}}
+       */
+      // const egdeLambdaFunctionArn = new CfnDynamicReference(
+      //   CfnDynamicReferenceService.SECRETS_MANAGER,
+      //   `${props.name}-lambdEdgeArn`// 'secret-id:secret-string:json-key:version-stage:version-id',
+      // )
 
 
 
-  const command = new GetObjectCommand({
-      Bucket: S3_BUCKET_NAME,
-      Key: uri.substring(1)
+
+
+
+
+
+      const bucketAssetsArn = Fn.importValue(`${props.name}-static-assets-bucketArn`);
+
+      const bucketAssetsbucketName = Fn.importValue(`${props.name}-static-assets-bucketName`);
+
+      const bucketAssets:IBucket = Bucket.fromBucketAttributes(this, `${props.name}-AssetsBucket`, {
+        bucketName: `${bucketAssetsbucketName}`,
+        bucketArn: `${bucketAssetsArn}`
+      })
+
+     // const adminAuthorizerArn = Fn.importValue(`${props.name}-adminAuthorizerArn`);
+
+
+      // const adminAPILambda:LambdaFunction = new LambdaFunction(this, `${props.name}-adminAPILambda`, {
+      //   code: this.code,
+      //   handler: 'handler/admin.main',
+      //   runtime: Runtime.NODEJS_16_X,
+      //   // timeout: Duration.seconds(60),
+      //   // vpc: DefaultVpc,
+      //   // vpcSubnets: {
+      //   //   subnetType: SubnetType.PRIVATE,
+      //   // },
+      //   // tracing: Tracing.ACTIVE,
+      //   functionName: `${props.name}-WISPadminAPILambda`,
+      //   environment:{
+      //     BUCKET_ASSETS_BUCKET_NAME: bucketAssetsbucketName
+      //   }
+      // })
+
+
+      // adminAPILambda.addToRolePolicy(
+      //   new PolicyStatement({
+      //     effect: Effect.ALLOW,
+      //     resources: [`${bucketAssetsArn}/*`], //bucket.bucketArn, otherRole.roleArn
+      //     actions: ['s3:*']
+      //   })
+      // );
+
+
+
+      // const integration = new LambdaIntegration(adminAPILambda);
+
+
+      this.api = new RestApi(this, `${props.name}-WISP-admin-API`, {
+        defaultCorsPreflightOptions:{
+          allowOrigins: [ '*' ],
+          allowMethods: [ 'GET, POST, OPTIONS, PUT, PATCH, DELETE' ],
+          allowCredentials: true,
+          allowHeaders: [ 'Content-Type','X-Amz-Date','Authorization','X-Api-Key','X-Amz-Security-Token','X-Carrier', 'X-Currency', 'X-Language', '*' ]
+        },
+        deployOptions: {
+        metricsEnabled: true,
+        loggingLevel: MethodLoggingLevel.INFO,
+        dataTraceEnabled: true,
+        tracingEnabled: true,
+        stageName: 'prod'
+        }
     });
 
-    console.log('key parts: ', S3_BUCKET_NAME, 'key', uri.substring(1), 'clientIp:',clientIp);
-  
-    try {
-      const response = await client.send(command);
-
-      console.log('POST response: ', response)
-      // The Body object also has 'transformToByteArray' and 'transformToWebStream' methods.
-      const html = await response.Body.transformToString();
-
-
-      // content =  html
-      // .replace('</head>', `<script>window.postData = ${serialize(params)};</script> </head>`)
-
-
-      content =  html
-
-    
-    } catch (err) {
-      console.error('html error',err);
-    }
+    const root = this.api.root
+    const path = this.api.root.addResource('{proxy+}');
 
 
 
 
 
-       const responsePost = {
+/**
+ * Lambda Edge
+ * CloudFront provides two ways to send authenticated requests to an Amazon S3 origin: origin access control (OAC) and origin access identity (OAI). We recommend using OAC because it supports:
+ * All Amazon S3 buckets in all AWS Regions, including opt-in Regions launched after December 2022
+ * Dynamic requests (PUT and DELETE) to Amazon S3
+ * OAI doesn't work for the scenarios in the preceding list, or it requires extra workarounds in those scenarios. The following topics describe how to use OAC with an Amazon S3 origin. For information about how to migrate from OAI to OAC, see Migrating from origin access identity (OAI) to origin access control (OAC).
+ * https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html
+ */
+
+const adminAuthorizerLambda:LambdaFunction = new LambdaFunction(this, `${props.name}-adminAuthorizerLambdause`, {
+  code: Code.fromInline(` const content = "<\!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Simple Lambda@Edge Static Content Response</title></head><body><p>Hello from Lambda@Edge!</p></body></html>";
+  async function main(event:any,context:any, callback:any){
+    const request = event.Records[0].cf.request;
+    console.log(request);
+    const authHeader = request.headers;
+
+    console.log("Admin Post event 2:", event);
+
+    console.log("Admin Post request:", request);
+
+    console.log("Admin Post authHeader:", authHeader);
+
+
+    const response = {
       status: '200',
       statusDescription: 'OK',
       headers: {
@@ -148,26 +266,177 @@ if (request.method === 'POST') {
       },
       body: content,
   };
-  console.log('returnEvent:', responsePost)
-  return responsePost;
+ return response;
+
+    // try {
+ 
+    //     console.log("API key  is valid.");
+        
+    
+    //     callback(null, request);
+    //   } catch (err) {
+    //     console.log("Token not valid!", err);
+    
+    //     callback(null, {
+    //       status: "403",
+    //       body: "Unauthorized",
+    //     });
+    //   }
+  };
+
+  module.exports = {main};`),
+  handler: 'index.main',
+  runtime: Runtime.NODEJS_18_X,
+  memorySize: 128,
+  functionName: `${props.name}-WISPadminAuthorizerLambdause1`,
+  currentVersionOptions:{
+    removalPolicy: RemovalPolicy.DESTROY
+  }
+})
+
+/**
+ * Add to Lambda execution role permissions to call 
+ */
+
+addEdgeLambdaToRoleTrustStatement(adminAuthorizerLambda.role!);
+
+
+   const apiOriginProps:RestApiOriginProps = {
+    originPath: '/prod'
+   }
 
 
 
-} else {
+     const defaultBehavior:BehaviorOptions =  {
+      origin: new RestApiOrigin(this.api, apiOriginProps),
+      allowedMethods:AllowedMethods.ALLOW_ALL
+    }
 
-  const responseHtml = {
-    status: '200',
-    statusDescription: 'OK',        
-    body: content,
- };
+    const bucketProps:S3OriginProps ={
+      originAccessIdentity: props.originAccessIdentity
+    }
+
+    const sourceS3Configuration:BehaviorOptions =  {
+      origin: new S3Origin(bucketAssets,bucketProps),
+      edgeLambdas: [
+        {
+          functionVersion: adminAuthorizerLambda.currentVersion, //'arn:aws:lambda:us-east-1:488764794370:function:wisp-portal-serverless-WISPadminAuthorizerLambda:4' // Version.fromVersionArn(this, 'EdgeLambdaFunctionArn', props.lambdaEdge.adminAuthorizerLambdaArn),
+          eventType: LambdaEdgeEventType.VIEWER_REQUEST,
+          includeBody: true
+        },
+      ],
+      allowedMethods: AllowedMethods.ALLOW_ALL,
+      cachePolicy: CachePolicy.CACHING_DISABLED
+
+    }
+
+  const siteDomain = props.domainConfig.adminSubDomain + '.' + props.domainConfig.domainName;
+
+  // const resourceEnvironment: ResourceEnvironment = {
+  //   account: props.env.account,
+  //   region: props.env.region,
+  // };
 
 
-  return request;
+  const viewerCertificateOp:ICertificate =Certificate.fromCertificateArn(this,'d-wisp.nextcloud-cert',props.domainConfig.certArn)
+
+    /**
+     * Create Admin Cloudfront WAF
+     */
+      const  webaclProps: CfnWebACLProps = {
+        defaultAction: {
+          allow: {}
+        },
+        scope: "CLOUDFRONT",
+        visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: `waf-cloudfront-allow-acl-admin-${props.name}`,
+            sampledRequestsEnabled: false,
+        }
+    }
+
+    const webaclAdminCFD = new CfnWebACL(this, `waf-cloudfront-allow-acl-${props.name}`, webaclProps);
+
+
+     const distributionProps:DistributionProps = {
+      httpVersion: HttpVersion.HTTP2,
+      priceClass: PriceClass.PRICE_CLASS_100,
+      defaultBehavior: defaultBehavior,
+      additionalBehaviors:{assets:sourceS3Configuration},
+      defaultRootObject: '/',
+      certificate: viewerCertificateOp,
+      domainNames:[siteDomain],
+      comment: `${props.name}-WISP-admin-API-CDN`,
+      webAclId: webaclAdminCFD.attrArn
+    }
+
+    const distribution:IDistribution = new Distribution(this, `${props.name}-WISP-admin-API-CDN`, distributionProps);
+
+    /**
+     * Setup Route53 subdomain Alias pointing to cloudfront distibution
+     */
+
+     const HostedZoneAtt:HostedZoneAttributes = { ...props.domainConfig.zone };
+
+     const zone:IHostedZone = HostedZone.fromHostedZoneAttributes(this, 'Zone', HostedZoneAtt );
+
+     new ARecord(this, `${props.name}-wispPortalCoreadminAliasRecord`, {
+       recordName: siteDomain,
+       target: RecordTarget.fromAlias(new CloudFrontTarget(distribution)),
+       zone,
+     });
+
+     new CfnOutput(this, 'wispPortalCoreadmin', { value: 'https://' + siteDomain });
+
+       // // Tag for public access
+       //Tags.of(distribution).add(props.domainConfig.tag.k, props.domainConfig.tag.v);
+
+    this.distributionAdmin = distribution;
+
+
+    new StringParameter(this, 'SSMCloudFrontDomainName', {
+      description: 'CloudFront DomainName',
+      parameterName: `/${props.name}/CloudFront/DomainName`,
+      stringValue: distribution.distributionDomainName,
+    })
+
+    new StringParameter(this, 'SSMCloudFrontDistributionID', {
+      description: 'CloudFront admin DistributionID',
+      parameterName: `/${props.name}/CloudFront/adminDistributionID`,
+      stringValue: distribution.distributionId,
+    })
+
+    new StringParameter(this, 'SSMAPIGatewayRestIs', {
+      description: 'API Gateway ID',
+      parameterName: `/${props.name}/APIGateway/DeployApiId`,
+      stringValue: this.api.restApiId,
+    })
+
+    // new CfnOutput(this,
+    //   'EdgeLambdaARnunctionName',
+    // {
+    //   value: egdeLambdaFunctionArnImport.valueAsString,
+    //   exportName: `${this.stackName}-EdgeLambdaARn`
+    // });
+
+
+
+    // new CfnOutput(this,
+    //   'RenderFunctionName',
+    // {
+    //   value: adminAPILambda.functionName,
+    //   exportName: `${this.stackName}-adminAPILambdaFunctionName`
+    // });
+
+    // new CfnOutput(this,
+    //   'adminAPILambdaFunctionArn',
+    // {
+    //   value: adminAPILambda.functionArn,
+    //   exportName: `${this.stackName}-adminAPILambdaFunctionArn`
+    // });
+
+
+
+    }
+
 }
-
-
-return request;
-
-};
-
-module.exports = {main:main};
