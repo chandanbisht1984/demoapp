@@ -1,157 +1,40 @@
-import { Stack, App, StackProps, Fn, CfnOutput, ResourceEnvironment, SecretValue } from 'aws-cdk-lib';
-import { Construct } from 'constructs';
-import { CfnParametersCode, Code, Runtime, Function as LambdaFunction, Tracing  } from 'aws-cdk-lib/aws-lambda'
-import {CfnParameter, Duration} from 'aws-cdk-lib'
-import {CfnWebACL, CfnWebACLProps, CfnWebACLAssociation, CfnRuleGroup, CfnLoggingConfiguration} from "aws-cdk-lib/aws-wafv2";
-import { Bucket, IBucket, BucketAccessControl } from 'aws-cdk-lib/aws-s3';
-import {Role, ServicePrincipal, PolicyStatement, Effect, ManagedPolicy, Policy } from 'aws-cdk-lib/aws-iam';
-
-import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
-
-// import { ServicePrincipals, ManagedPolicies } from 'aws-cdk-lib/consta';
-
-
-import { getParam } from '../helpers/helpers';
-
-import {RestApi, LambdaIntegration, MethodLoggingLevel, Cors} from 'aws-cdk-lib/aws-apigateway';
-
-import {StringParameter} from 'aws-cdk-lib/aws-ssm';
-
-// import main from '../../../apps/handler/adminAuthorizer'
-
-import {
-  CloudFrontWebDistribution, 
-  CloudFrontWebDistributionProps,
-  HttpVersion, 
-  PriceClass, 
-  ViewerProtocolPolicy, 
-  CloudFrontAllowedMethods, 
-  OriginProtocolPolicy, 
-  OriginAccessIdentity, 
-  SSLMethod , 
-  SecurityPolicyProtocol, 
-  IDistribution, 
-  SourceConfiguration, 
-  ViewerCertificate,
-  CloudFrontAllowedCachedMethods,
-  Distribution,
-  experimental,
-  DistributionProps,
-  LambdaEdgeEventType,
-  BehaviorOptions,
-  IOrigin,
-  AllowedMethods,
-  CachePolicy
-}from 'aws-cdk-lib/aws-cloudfront'
-import { HostedZone, ARecord, RecordTarget, HostedZoneAttributes, IHostedZone } from 'aws-cdk-lib/aws-route53';
-import { CloudFrontTarget } from 'aws-cdk-lib/aws-route53-targets';
-
-import { ICertificate,Certificate } from 'aws-cdk-lib/aws-certificatemanager';
-
-import { S3Origin, S3OriginProps ,RestApiOrigin, RestApiOriginProps} from 'aws-cdk-lib/aws-cloudfront-origins';
-
-
-export interface  LambdaEdgeProps extends StackProps {
-    name: string
-    env: { 
-      region: string
-      account: string
+export const config = {
+    name: 'wisp-portal-serverless',
+    title: 'WISP portal serverless',
+    environment: 'DEV',
+    codecommit: {
+      pipelineName: 'wisp-portal-serverless-stack',
+      repositoryName: 'wisp-portal-serverless'
     },
-    lambdaFunctionArnParameterName: string;
- 
+    core:{
+      apiId:'g970agyl4b',
+      domain:'g970agyl4b.execute-api.us-west-2.amazonaws.com',
+      originPath: 'dev'
+    },
+    loggroup:'/ecs/dev/wisp/wisp-portal-serverless/',
+    env: { region: 'us-east-1', account: process.env.CDK_DEFAULT_ACCOUNT || '488764794370'},
+    domainConfig:{
+      domainName: 'd-wisp.nextcloud.aero', 
+      siteSubDomain: 'portal', 
+      adminSubDomain:'wisp-portal-serverless-admin-api',
+      certRegion:'us-east-1', 
+      tag:{
+        k: 'pac:devsecops:waf', 
+        v: 'Public'
+      },
+      certArn: 'arn:aws:acm:us-east-1:488764794370:certificate/98f5d5af-4c50-4e60-a72b-3e973e2a4934',
+      zone:{
+        hostedZoneId: 'Z0223497EURPBL0L5SMM',
+        zoneName: 'd-wisp.nextcloud.aero'
+  
+      }
+    },
+    waf:{
+      cloudfrontallowacl:'arn:aws:wafv2:us-west-2:488764794370:regional/webacl/cloudfrontallowacl-tBca0J9gJg7Y/f1cdeb9a-a073-4b14-b701-0ae789d5090d'
+    },
+    lambdaEdge: {
+      adminAuthorizerLambdaArn: 'arn:aws:lambda:us-east-1:488764794370:function:wisp-portal-serverless-WISPadminAuthorizerLambda:3'
+    }
+    // crossRegionReferences: true
   }
   
-  export class LambdaEdgeStack extends Stack {
-    public readonly code: CfnParametersCode;
-
-
-    constructor(scope: Construct, id: string, props: LambdaEdgeProps) {
-      super(scope, id, props)
-
-      if (props.env?.region !== 'us-east-1') {
-        throw new Error("The stack contains Lambda@Edge functions and must be deployed in 'us-east-1'");
-      }
-  
-      // Policy.aws_
-      // const { managedPolicyArn } = ManagedPolicy.fromAwsManagedPolicyName(
-      //   ManagedPolicies.AWS_LAMBDA_BASIC_EXECUTION_ROLE
-      // );
-
-      this.code = Code.fromCfnParameters({
-        bucketNameParam: new CfnParameter(this, 'CodeBucketName'),
-        objectKeyParam: new CfnParameter(this, 'CodeBucketObjectKey')
-      })
-
-
-
-      // const adminAuthorizerLambda:LambdaFunction = new LambdaFunction(this, `${props.name}-adminAuthorizerLambda`, {
-      //   code: Code.fromInline(`async function main(event:any,context:any, callback:any){
-      //     const request = event.Records[0].cf.request;
-      //     console.log(request);
-      //     const authHeader = request.headers;
-      
-      //     console.log("Admin Post event:", event);
-      
-      //     console.log("Admin Post request:", request);
-      
-      //     console.log("Admin Post authHeader:", authHeader);
-      
-      //     try {
-       
-      //         console.log("API key  is valid.");
-              
-          
-      //         callback(null, request);
-      //       } catch (err) {
-      //         console.log("Token not valid!", err);
-          
-      //         callback(null, {
-      //           status: "403",
-      //           body: "Unauthorized",
-      //         });
-      //       }
-      //   };
-      
-      //   module.exports = {main};`),
-      //   handler: 'index.main',
-      //   runtime: Runtime.NODEJS_18_X,
-      //   memorySize: 128,
-      //   functionName: `${props.name}-WISPadminAuthorizerLambda`
-      // })
-
-
-
-    // new CfnOutput(this, 
-    //   'adminAuthorizerArn', 
-    // {
-    //   value: adminAuthorizerLambda.functionArn,
-    //   exportName: `${props.name}-adminAuthorizerArn`
-    // });
-
-
-    // const { functionArn =''} = adminAuthorizerLambda.currentVersion;
-
-    // new StringParameter(this, 'LambdaFunctionArnParameter', {
-    //   parameterName: props.lambdaFunctionArnParameterName,
-    //   stringValue: functionArn,
-    // });
-    
-
-    // new Secret(this, `${props.name}-lambdEdgeArn`, {
-    //   secretName: `${props.name}-lambdEdgeArn`,
-    //   description: `${props.name}-lambdEdgeArn`,
-    //   secretStringValue: SecretValue.unsafePlainText(functionArn)
-    // })
-
-    // new CfnOutput(this, 
-    //   'lambdaEdgeLambdaFunctionArn', 
-    // {
-    //   value: lambdaEdgeLambda.functionArn,
-    //   exportName: `${this.stackName}-lambdaEdgeLambdaFunctionArn`
-    // });
-  
-
-      
-    }
-    
-}
